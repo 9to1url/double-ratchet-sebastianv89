@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 const MAX_SKIP: usize = 1000;
 
 /// Message Counter (as seen in the header)
-pub type Counter = u32;
+pub type Counter = u64;
 
 /// The `DoubleRatchet` can encrypt/decrypt messages while providing forward secrecy and
 /// post-compromise security.
@@ -284,7 +284,10 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
     ) -> (Header<CP::PublicKey>, Vec<u8>) {
         // TODO: is this the correct place for clear_stack_on_return?
         let (h, mk) = self.ratchet_send_chain(rng);
-        let pt = CP::encrypt(&mk, plaintext, &Self::concat(&h, associated_data));
+        let mut ad = h.as_ref();
+        ad.extend_from_slice(associated_data);
+        //let pt = CP::encrypt(&mk, plaintext, &Self::concat(&h, associated_data));
+        let pt = CP::encrypt(&mk, plaintext, &ad);
         (h, pt)
     }
 
@@ -351,8 +354,11 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
         associated_data: &[u8],
     ) -> Result<Vec<u8>, DecryptError> {
         // TODO: is this the correct place for clear_stack_on_return?
+        let mut h = header.as_ref();
+        h.extend_from_slice(associated_data);
         let (diff, pt) =
-            self.try_decrypt(header, ciphertext, &Self::concat(&header, associated_data))?;
+            self.try_decrypt(header, ciphertext, &h)?;
+            //self.try_decrypt(header, ciphertext, &Self::concat(&header, associated_data))?;
         self.update(diff, header);
         Ok(pt)
     }
@@ -462,6 +468,7 @@ impl<CP: CryptoProvider> DoubleRatchet<CP> where {
     }
 
     // Concatenate `h` and `ad` in a single byte-vector.
+    #[allow(dead_code)]
     fn concat(h: &Header<CP::PublicKey>, ad: &[u8]) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(ad);
@@ -490,8 +497,16 @@ impl<PK: AsRef<[u8]>> Header<PK> {
     // yikes
     fn extend_bytes_into(&self, v: &mut Vec<u8>) {
         v.extend_from_slice(self.dh.as_ref());
-        v.extend_from_slice(&self.n.to_be_bytes());
         v.extend_from_slice(&self.pn.to_be_bytes());
+        v.extend_from_slice(&self.n.to_be_bytes());
+    }
+
+    fn as_ref(&self) -> Vec<u8> {
+        let mut bytes:Vec<u8> = Vec::new();
+        bytes.extend_from_slice(self.dh.as_ref().clone());
+        bytes.extend_from_slice(&self.pn.clone().to_be_bytes());
+        bytes.extend_from_slice(&self.n.clone().to_be_bytes());
+        bytes
     }
 }
 
@@ -1127,7 +1142,7 @@ mod tests {
             let (h_a, ct_a) = alice.ratchet_encrypt(b"Hello Bob", ad_a, &mut rng);
             bob.ratchet_decrypt(&h_a, &ct_a, ad_a).unwrap();
             stored += MAX_SKIP;
-            &bob.mkskipped.0.values().map(|hm| hm.len()).sum::<usize>();
+            let _ = &bob.mkskipped.0.values().map(|hm| hm.len()).sum::<usize>();
         }
         alice.ratchet_encrypt(b"Bob can't store this key anymore", ad_a, &mut rng);
         let (h_a, ct_a) = alice.ratchet_encrypt(b"Gotcha, Bob!", ad_a, &mut rng);
